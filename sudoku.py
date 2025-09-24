@@ -4,11 +4,14 @@ import copy
 import time
 
 # ----------------------------
-# CSP Components: Variables, Domain, Constraints
+# Types
 # ----------------------------
-
 Variable = Tuple[int, int]
 Grid = List[List[int]]
+
+# ----------------------------
+# CSP Components: Variables, Domain, Constraints
+# ----------------------------
 
 def get_variables() -> List[Variable]:
     """Return list of variables (row, column) for 9x9 Sudoku."""
@@ -51,39 +54,8 @@ def check_constraint(grid: Grid, var: Variable, value: int) -> bool:
     return True
 
 # ----------------------------
-# Forward checking helpers (fixed)
+# Forward checking helpers
 # ----------------------------
-def initial_domains(grid: Grid) -> Dict[Variable, List[int]]:
-    """
-    Build initial domains for each variable:
-    - assigned cells -> [value]
-    - unassigned cells -> [1..9] minus values already present in peers
-    """
-    domains: Dict[Variable, List[int]] = {}
-    for row in range(9):
-        for column in range(9):
-            variable = (row, column)
-            if grid[row][column] != 0:
-                domains[variable] = [grid[row][column]]
-            else:
-                # start with all values then prune those seen in peers
-                possible_values = list(range(1, 10))
-                # remove values that are already present in the row
-                used_in_row = {grid[row][peer_column] for peer_column in range(9) if grid[row][peer_column] != 0}
-                # remove values that are already present in the column
-                used_in_column = {grid[peer_row][column] for peer_row in range(9) if grid[peer_row][column] != 0}
-                # remove values that are already present in the 3x3 box
-                box_start_row, box_start_column = (row // 3) * 3, (column // 3) * 3
-                used_in_box = {
-                    grid[box_row_index][box_column_index]
-                    for box_row_index in range(box_start_row, box_start_row + 3)
-                    for box_column_index in range(box_start_column, box_start_column + 3)
-                    if grid[box_row_index][box_column_index] != 0
-                }
-                used_values = used_in_row.union(used_in_column).union(used_in_box)
-                domains[variable] = sorted([v for v in possible_values if v not in used_values])
-    return domains
-
 def peers_of(var: Variable) -> List[Variable]:
     """Return list of peer coordinates that share row, column, or 3x3 box with var (excluding var)."""
     row, column = var
@@ -103,34 +75,60 @@ def peers_of(var: Variable) -> List[Variable]:
     box_start_row, box_start_column = (row // 3) * 3, (column // 3) * 3
     for box_row_index in range(box_start_row, box_start_row + 3):
         for box_column_index in range(box_start_column, box_start_column + 3):
-            if (box_row_index, box_column_index) != var and (box_row_index, box_column_index) not in peers:
-                peers.append((box_row_index, box_column_index))
+            peer_variable = (box_row_index, box_column_index)
+            if peer_variable != var and peer_variable not in peers:
+                peers.append(peer_variable)
 
     return peers
 
-def forward_check(assign_variable: Variable, assigned_value: int, domains: Dict[Variable, List[int]], grid: Grid) -> Tuple[List[Tuple[Variable, int]], bool]:
+def initial_domains(grid: Grid) -> Dict[Variable, List[int]]:
+    """
+    Build initial domains for each variable:
+      - assigned cells -> [value]
+      - unassigned cells -> [1..9] minus values already present in peers
+    """
+    domains: Dict[Variable, List[int]] = {}
+    for row in range(9):
+        for column in range(9):
+            variable = (row, column)
+            if grid[row][column] != 0:
+                domains[variable] = [grid[row][column]]
+            else:
+                possible_values = list(range(1, 10))
+                used_in_row = {grid[row][peer_column] for peer_column in range(9) if grid[row][peer_column] != 0}
+                used_in_column = {grid[peer_row][column] for peer_row in range(9) if grid[peer_row][column] != 0}
+                box_start_row, box_start_column = (row // 3) * 3, (column // 3) * 3
+                used_in_box = {
+                    grid[box_row_index][box_column_index]
+                    for box_row_index in range(box_start_row, box_start_row + 3)
+                    for box_column_index in range(box_start_column, box_start_column + 3)
+                    if grid[box_row_index][box_column_index] != 0
+                }
+                used_values = used_in_row.union(used_in_column).union(used_in_box)
+                domains[variable] = sorted([v for v in possible_values if v not in used_values])
+    return domains
+
+def forward_check(assign_variable: Variable, assigned_value: int, domains: Dict[Variable, List[int]], grid: Grid) -> Optional[List[Tuple[Variable, int]]]:
     """
     Perform forward checking after assigning assign_variable = assigned_value.
     Remove assigned_value from domains of unassigned peers.
-    Return (pruned_list, success_flag). pruned_list is the list of removals in order.
-    success_flag is False if any peer domain becomes empty (domain wiped out).
+    Return a list of (peer_variable, removed_value) so caller can undo them on backtrack.
+    If any peer domain becomes empty, return None to indicate failure.
     """
     pruned_list: List[Tuple[Variable, int]] = []
 
-    for peer in peers_of(assign_variable):
-        peer_row, peer_column = peer
+    for peer_variable in peers_of(assign_variable):
+        peer_row, peer_column = peer_variable
         if grid[peer_row][peer_column] != 0:
-            # already assigned in grid
             continue
-        peer_domain = domains.get(peer, [])
-        if assigned_value in peer_domain:
-            peer_domain.remove(assigned_value)
-            pruned_list.append((peer, assigned_value))
-            if not peer_domain:
-                # domain wiped out -> failure, but return the pruned list so caller can undo
-                return pruned_list, False
+        if assigned_value in domains.get(peer_variable, []):
+            domains[peer_variable].remove(assigned_value)
+            pruned_list.append((peer_variable, assigned_value))
+            if not domains[peer_variable]:
+                # domain wiped out -> failure
+                return None
 
-    return pruned_list, True
+    return pruned_list
 
 def undo_pruning(pruned_list: List[Tuple[Variable, int]], domains: Dict[Variable, List[int]]):
     """Undo the domain removals recorded in pruned_list."""
@@ -141,54 +139,78 @@ def undo_pruning(pruned_list: List[Tuple[Variable, int]], domains: Dict[Variable
             domains[variable].sort()
 
 # ----------------------------
-# CSP Backtracking Solver (with forward checking only)
+# MRV selection (uses domains)
 # ----------------------------
+def select_unassigned_variable(grid: Grid, domains: Dict[Variable, List[int]]) -> Optional[Variable]:
+    """
+    Find next unassigned variable using MRV:
+    choose the empty cell with the smallest number of legal values (according to domains).
+    Tie-break deterministically by row then column.
+    """
+    best_variable: Optional[Variable] = None
+    best_domain_size = 10  # larger than max domain size 9
 
-def select_unassigned_variable(grid: Grid) -> Optional[Variable]:
-    """Find next unassigned variable (empty cell) - first empty cell (no MRV)."""
     for row in range(9):
         for column in range(9):
             if grid[row][column] == 0:
-                return (row, column)
-    return None
+                variable = (row, column)
+                domain_values = domains.get(variable, [])
+                domain_size = len(domain_values)
+                # immediate failure detection (domain wiped out)
+                if domain_size == 0:
+                    return variable
+                if domain_size < best_domain_size:
+                    best_domain_size = domain_size
+                    best_variable = variable
+                    if best_domain_size == 1:
+                        return best_variable
+                elif domain_size == best_domain_size and best_variable is not None:
+                    # tie-break deterministically by smaller (row, column)
+                    if variable < best_variable:
+                        best_variable = variable
 
-# instrumentation counters
+    return best_variable
+
+# ----------------------------
+# CSP Backtracking Solver (MRV + Forward Checking)
+# ----------------------------
+
 assignments_count = 0
 backtracks_count = 0
 
 def backtrack_solve(grid: Grid, domains: Dict[Variable, List[int]]) -> Optional[Grid]:
     """
-    Backtracking solver that uses forward checking.
-    domains must be the current domains for each variable (kept up-to-date).
+    Backtracking solver that uses MRV for selection and forward checking for pruning.
+    `domains` must reflect current domains for each variable.
     """
     global assignments_count, backtracks_count
 
-    variable = select_unassigned_variable(grid)
+    variable = select_unassigned_variable(grid, domains)
     if not variable:
         return grid  # solved
 
     row, column = variable
-    # iterate domain values from domains dict (deterministic order)
+    # iterate over a copy so modifications to domains don't affect iteration
     for value in list(domains[variable]):
         if check_constraint(grid, variable, value):
             # assign
             grid[row][column] = value
             assignments_count += 1
 
-            # save domain state for this variable (so undo sets it back to saved)
-            saved_domain_for_variable = list(domains[variable])
+            # save domain state for this variable so we can restore it after backtracking
+            saved_domain_for_variable = domains[variable]
             domains[variable] = [value]
 
-            # forward check: prune peers' domains (now returns pruned list + success flag)
-            pruned, success = forward_check(variable, value, domains, grid)
-            if success:
+            # forward check: prune peers' domains
+            pruned = forward_check(variable, value, domains, grid)
+            if pruned is not None:
                 # continue search
                 result = backtrack_solve(grid, domains)
                 if result is not None:
                     return result
 
             # undo prunings (if any) and restore domain and assignment
-            if pruned:
+            if pruned is not None:
                 undo_pruning(pruned, domains)
             grid[row][column] = 0
             domains[variable] = saved_domain_for_variable
@@ -252,3 +274,4 @@ if __name__ == "__main__":
         print("No solution found.")
 
     print(f"Assignments: {assignments_count}, Backtracks: {backtracks_count}, Time: {elapsed_time:.4f}s")
+ 
