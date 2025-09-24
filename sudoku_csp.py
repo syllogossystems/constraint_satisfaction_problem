@@ -48,23 +48,54 @@ def check_constraint(grid: List[List[int]], var: Tuple[int, int], value: int) ->
     return True
 
 # ----------------------------
-# CSP Backtracking Solver
+# Minimal MRV helper
+# ----------------------------
+def available_values(grid: List[List[int]], var: Tuple[int, int]) -> List[int]:
+    """Return legal values for var under current grid (uses check_constraint)."""
+    row, column = var
+    if grid[row][column] != 0:
+        return [grid[row][column]]
+    values: List[int] = []
+    for candidate_value in range(1, 10):
+        if check_constraint(grid, var, candidate_value):
+            values.append(candidate_value)
+    return values
+
+# ----------------------------
+# CSP Backtracking Solver (MRV added)
 # ----------------------------
 
 def select_unassigned_variable(grid: List[List[int]]) -> Optional[Tuple[int, int]]:
-    """Find next unassigned variable (empty cell)."""
+    """
+    Find next unassigned variable (empty cell) using MRV:
+    choose the empty cell with the smallest number of legal values.
+    """
+    best_variable: Optional[Tuple[int, int]] = None
+    best_domain_size = 10  # larger than max domain size 9
+
     for row in range(9):
         for column in range(9):
             if grid[row][column] == 0:
-                return (row, column)
-    return None
+                var = (row, column)
+                domain_values = available_values(grid, var)
+                domain_size = len(domain_values)
+                # if a cell has zero legal moves, we can return it immediately (causes immediate backtrack)
+                if domain_size == 0:
+                    return var
+                if domain_size < best_domain_size:
+                    best_domain_size = domain_size
+                    best_variable = var
+                    # perfect MRV short-circuit: can't get smaller than 1
+                    if best_domain_size == 1:
+                        return best_variable
+    return best_variable
 
 # instrumentation counters (module-level)
 assignments_count = 0
 backtracks_count = 0
 
 def backtrack_solve(grid: List[List[int]]) -> Optional[List[List[int]]]:
-    """Backtracking CSP solver for Sudoku (simple, first-empty selection)."""
+    """Backtracking CSP solver for Sudoku (MRV selection)."""
     global assignments_count, backtracks_count
 
     variable = select_unassigned_variable(grid)
